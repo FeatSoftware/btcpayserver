@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using BTCPayServer.Controllers;
 using BTCPayServer.Models.AppViewModels;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,7 +41,7 @@ namespace BTCPayServer.Services.Apps
                {
 
                    var result =
-                       await _AppsPublicController.ContributeToCrowdfund(Context.Items["app"].ToString(), model);
+                       await _AppsPublicController.ContributeToCrowdfund(Context.Items["app"].ToString(), model, Context.ConnectionAborted);
                    switch (result)
                    {
                        case OkObjectResult okObjectResult:
@@ -62,5 +63,13 @@ namespace BTCPayServer.Services.Apps
 
         }
 
+        public static string GetHubPath(HttpRequest request)
+        {
+            return request.GetRelativePathOrAbsolute("/apps/hub");
+        }
+        public static void Register(HubRouteBuilder route)
+        {
+            route.MapHub<AppHub>("/apps/hub");
+        }
     }
 }

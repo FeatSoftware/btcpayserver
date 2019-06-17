@@ -21,6 +21,7 @@ using BTCPayServer.Payments.Changelly;
 using BTCPayServer.Payments.CoinSwitch;
 using BTCPayServer.Security;
 using BTCPayServer.Rating;
+using BTCPayServer.Services.PaymentRequests;
 using BTCPayServer.Services.Mails;
 
 namespace BTCPayServer.Data
@@ -41,6 +42,11 @@ namespace BTCPayServer.Data
         {
             get; set;
         }
+        
+        public List<PaymentRequestData> PaymentRequests
+        {
+            get; set;
+        }
 
         public List<InvoiceData> Invoices { get; set; }
 
@@ -58,17 +64,15 @@ namespace BTCPayServer.Data
         }
         public IEnumerable<ISupportedPaymentMethod> GetSupportedPaymentMethods(BTCPayNetworkProvider networks)
         {
+            networks = networks.UnfilteredNetworks;
 #pragma warning disable CS0618
             bool btcReturned = false;
 
             // Legacy stuff which should go away
             if (!string.IsNullOrEmpty(DerivationStrategy))
             {
-                if (networks.BTC != null)
-                {
-                    btcReturned = true;
-                    yield return BTCPayServer.DerivationStrategy.Parse(DerivationStrategy, networks.BTC);
-                }
+                btcReturned = true;
+                yield return DerivationSchemeSettings.Parse(DerivationStrategy, networks.BTC);
             }
 
 
@@ -78,18 +82,24 @@ namespace BTCPayServer.Data
                 foreach (var strat in strategies.Properties())
                 {
                     var paymentMethodId = PaymentMethodId.Parse(strat.Name);
-                    var network = networks.GetNetwork(paymentMethodId.CryptoCode);
+                    var network = networks.GetNetwork<BTCPayNetwork>(paymentMethodId.CryptoCode);
                     if (network != null)
                     {
                         if (network == networks.BTC && paymentMethodId.PaymentType == PaymentTypes.BTCLike && btcReturned)
                             continue;
                         if (strat.Value.Type == JTokenType.Null)
                             continue;
-                        yield return PaymentMethodExtensions.Deserialize(paymentMethodId, strat.Value, network);
+                        yield return
+                            paymentMethodId.PaymentType.DeserializeSupportedPaymentMethod(network, strat.Value);
                     }
                 }
             }
 #pragma warning restore CS0618
+        }
+
+        public void SetSupportedPaymentMethod(ISupportedPaymentMethod supportedPaymentMethod)
+        {
+            SetSupportedPaymentMethod(null, supportedPaymentMethod);
         }
 
         /// <summary>
@@ -99,8 +109,16 @@ namespace BTCPayServer.Data
         /// <param name="supportedPaymentMethod">The payment method, or null to remove</param>
         public void SetSupportedPaymentMethod(PaymentMethodId paymentMethodId, ISupportedPaymentMethod supportedPaymentMethod)
         {
-            if (supportedPaymentMethod != null && paymentMethodId != supportedPaymentMethod.PaymentId)
-                throw new InvalidOperationException("Argument mismatch");
+            if (supportedPaymentMethod != null && paymentMethodId != null && paymentMethodId != supportedPaymentMethod.PaymentId)
+            {
+                throw new InvalidOperationException("Incoherent arguments, this should never happen");
+            }
+            if (supportedPaymentMethod == null && paymentMethodId == null)
+                throw new ArgumentException($"{nameof(supportedPaymentMethod)} or {nameof(paymentMethodId)} should be specified");
+            if (supportedPaymentMethod != null && paymentMethodId == null)
+            {
+                paymentMethodId = supportedPaymentMethod.PaymentId;
+            }
 
 #pragma warning disable CS0618
             JObject strategies = string.IsNullOrEmpty(DerivationStrategies) ? new JObject() : JObject.Parse(DerivationStrategies);
@@ -128,7 +146,7 @@ namespace BTCPayServer.Data
                 }
             }
 
-            if (!existing && supportedPaymentMethod == null && paymentMethodId.IsBTCOnChain)
+            if (!existing && supportedPaymentMethod == null && supportedPaymentMethod.PaymentId.IsBTCOnChain)
             {
                 DerivationStrategy = null;
             }
@@ -263,7 +281,7 @@ namespace BTCPayServer.Data
 
         public double Multiplier { get; set; }
 
-        public decimal Apply(BTCPayNetwork network, decimal rate)
+        public decimal Apply(BTCPayNetworkBase network, decimal rate)
         {
             return rate * (decimal)Multiplier;
         }
@@ -301,6 +319,25 @@ namespace BTCPayServer.Data
 
         public bool RequiresRefundEmail { get; set; }
 
+        CurrencyPair[] _DefaultCurrencyPairs;
+        [JsonProperty("defaultCurrencyPairs", ItemConverterType = typeof(CurrencyPairJsonConverter))]
+        public CurrencyPair[] DefaultCurrencyPairs
+        {
+            get
+            {
+                return _DefaultCurrencyPairs ?? Array.Empty<CurrencyPair>();
+            }
+            set
+            {
+                _DefaultCurrencyPairs = value;
+            }
+        }
+
+        public string GetDefaultCurrencyPairString()
+        {
+            return string.Join(',', DefaultCurrencyPairs.Select(c => c.ToString()));
+        }
+
         public string DefaultLang { get; set; }
         [DefaultValue(60)]
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Populate)]
@@ -325,9 +362,10 @@ namespace BTCPayServer.Data
         public string PreferredExchange { get; set; }
 
         [JsonConverter(typeof(CurrencyValueJsonConverter))]
-        public CurrencyValue LightningMaxValue { get; set; }
-        [JsonConverter(typeof(CurrencyValueJsonConverter))]
         public CurrencyValue OnChainMinValue { get; set; }
+        [JsonConverter(typeof(CurrencyValueJsonConverter))]
+        public CurrencyValue LightningMaxValue { get; set; }
+        public bool LightningAmountInSatoshi { get; set; }
 
         [JsonConverter(typeof(UriJsonConverter))]
         public Uri CustomLogo { get; set; }
@@ -404,25 +442,12 @@ namespace BTCPayServer.Data
 
         [Obsolete("Use GetExcludedPaymentMethods instead")]
         public string[] ExcludedPaymentMethods { get; set; }
-#pragma warning disable CS0618 // Type or member is obsolete
-        public void SetWalletKeyPathRoot(PaymentMethodId paymentMethodId, KeyPath keyPath)
-        {
-            if (keyPath == null)
-                WalletKeyPathRoots.Remove(paymentMethodId.ToString());
-            else
-                WalletKeyPathRoots.AddOrReplace(paymentMethodId.ToString().ToLowerInvariant(), keyPath.ToString());
-        }
-        public KeyPath GetWalletKeyPathRoot(PaymentMethodId paymentMethodId)
-        {
-            if (WalletKeyPathRoots.TryGetValue(paymentMethodId.ToString().ToLowerInvariant(), out var k))
-                return KeyPath.Parse(k);
-            return null;
-        }
-#pragma warning restore CS0618 // Type or member is obsolete
-        [Obsolete("Use SetWalletKeyPathRoot/GetWalletKeyPathRoot instead")]
-        public Dictionary<string, string> WalletKeyPathRoots { get; set; } = new Dictionary<string, string>();
+
+        [Obsolete("Use DerivationSchemeSettings instead")]
+        public Dictionary<string, string> WalletKeyPathRoots { get; set; }
 
         public EmailSettings EmailSettings { get; set; }
+        public bool RedirectAutomatically { get; set; }
 
         public IPaymentFilter GetExcludedPaymentMethods()
         {

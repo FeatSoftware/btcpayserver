@@ -27,7 +27,7 @@ namespace BTCPayServer.Tests
             Logs.LogProvider = new XUnitLogProvider(helper);
         }
 
-        [Fact]
+        [Fact(Timeout = 60000)]
         [Trait("Integration", "Integration")]
         public async void CanSetChangellyPaymentMethod()
         {
@@ -218,7 +218,7 @@ namespace BTCPayServer.Tests
                     tester.NetworkProvider, fetcher);
                 changellyController.IsTest = true;
                 Assert.IsType<decimal>(Assert
-                    .IsType<OkObjectResult>(await changellyController.CalculateAmount(user.StoreId, "ltc", "btc", 1.0m))
+                    .IsType<OkObjectResult>(await changellyController.CalculateAmount(user.StoreId, "ltc", "btc", 1.0m, default))
                     .Value);
             }
         }

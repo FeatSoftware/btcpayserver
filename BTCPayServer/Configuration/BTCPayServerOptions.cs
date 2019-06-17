@@ -6,16 +6,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
-using System.Text;
-using StandardConfiguration;
 using Microsoft.Extensions.Configuration;
-using NBXplorer;
-using BTCPayServer.Payments.Lightning;
-using Renci.SshNet;
-using NBitcoin.DataEncoders;
 using BTCPayServer.SSH;
 using BTCPayServer.Lightning;
-using BTCPayServer.Configuration.External;
 using Serilog.Events;
 
 namespace BTCPayServer.Configuration
@@ -49,12 +42,8 @@ namespace BTCPayServer.Configuration
             get;
             private set;
         }
-        public List<IPEndPoint> Listen
-        {
-            get;
-            set;
-        }
-
+        public EndPoint SocksEndpoint { get; set; }
+        
         public List<NBXplorerConnectionSetting> NBXplorerConnectionSettings
         {
             get;
@@ -80,9 +69,11 @@ namespace BTCPayServer.Configuration
         public void LoadArgs(IConfiguration conf)
         {
             NetworkType = DefaultConfiguration.GetNetworkType(conf);
-            var defaultSettings = BTCPayDefaultSettings.GetDefaultSettings(NetworkType);
-            DataDir = conf.GetOrDefault<string>("datadir", defaultSettings.DefaultDataDirectory);
+            DataDir = conf.GetDataDir(NetworkType);
             Logs.Configuration.LogInformation("Network: " + NetworkType.ToString());
+
+            if (conf.GetOrDefault<bool>("launchsettings", false) && NetworkType != NetworkType.Regtest)
+                throw new ConfigException($"You need to run BTCPayServer with the run.sh or run.ps1 script");
 
             var supportedChains = conf.GetOrDefault<string>("chains", "btc")
                                       .Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -90,12 +81,12 @@ namespace BTCPayServer.Configuration
             NetworkProvider = new BTCPayNetworkProvider(NetworkType).Filter(supportedChains.ToArray());
             foreach (var chain in supportedChains)
             {
-                if (NetworkProvider.GetNetwork(chain) == null)
+                if (NetworkProvider.GetNetwork<BTCPayNetworkBase>(chain) == null)
                     throw new ConfigException($"Invalid chains \"{chain}\"");
             }
 
             var validChains = new List<string>();
-            foreach (var net in NetworkProvider.GetAll())
+            foreach (var net in NetworkProvider.GetAll().OfType<BTCPayNetwork>())
             {
                 NBXplorerConnectionSetting setting = new NBXplorerConnectionSetting();
                 setting.CryptoCode = net.CryptoCode;
@@ -114,6 +105,8 @@ namespace BTCPayServer.Configuration
                                 $"If you have a lightning charge server: 'type=charge;server=https://charge.example.com;api-token=yourapitoken'" + Environment.NewLine +
                                 $"If you have a lnd server: 'type=lnd-rest;server=https://lnd:lnd@lnd.example.com;macaroon=abf239...;certthumbprint=2abdf302...'" + Environment.NewLine +
                                 $"              lnd server: 'type=lnd-rest;server=https://lnd:lnd@lnd.example.com;macaroonfilepath=/root/.lnd/admin.macaroon;certthumbprint=2abdf302...'" + Environment.NewLine +
+                                $"If you have an eclair server: 'type=eclair;server=http://eclair.com:4570;password=eclairpassword;bitcoin-host=bitcoind:37393;bitcoin-auth=bitcoinrpcuser:bitcoinrpcpassword" + Environment.NewLine +
+                                $"               eclair server: 'type=eclair;server=http://eclair.com:4570;password=eclairpassword;bitcoin-host=bitcoind:37393" + Environment.NewLine +
                                 $"Error: {error}" + Environment.NewLine +
                                 "This service will not be exposed through BTCPay Server");
                         }
@@ -128,85 +121,7 @@ namespace BTCPayServer.Configuration
                     }
                 }
 
-                void externalLnd<T>(string code, string lndType)
-                {
-                    var lightning = conf.GetOrDefault<string>(code, string.Empty);
-                    if (lightning.Length != 0)
-                    {
-                        if (!LightningConnectionString.TryParse(lightning, false, out var connectionString, out var error))
-                        {
-                            Logs.Configuration.LogWarning($"Invalid setting {code}, " + Environment.NewLine +
-                                $"lnd server: 'type={lndType};server=https://lnd.example.com;macaroon=abf239...;certthumbprint=2abdf302...'" + Environment.NewLine +
-                                $"lnd server: 'type={lndType};server=https://lnd.example.com;macaroonfilepath=/root/.lnd/admin.macaroon;certthumbprint=2abdf302...'" + Environment.NewLine +
-                                $"Error: {error}" + Environment.NewLine +
-                                "This service will not be exposed through BTCPay Server");
-                        }
-                        else
-                        {
-                            var instanceType = typeof(T);
-                            ExternalServicesByCryptoCode.Add(net.CryptoCode, (ExternalService)Activator.CreateInstance(instanceType, connectionString));
-                        }
-                    }
-                };
-
-                externalLnd<ExternalLndGrpc>($"{net.CryptoCode}.external.lnd.grpc", "lnd-grpc");
-                externalLnd<ExternalLndRest>($"{net.CryptoCode}.external.lnd.rest", "lnd-rest");
-
-                {
-                    var spark = conf.GetOrDefault<string>($"{net.CryptoCode}.external.spark", string.Empty);
-                    if (spark.Length != 0)
-                    {
-                        if (!SparkConnectionString.TryParse(spark, out var connectionString, out var error))
-                        {
-                            Logs.Configuration.LogWarning($"Invalid setting {net.CryptoCode}.external.spark, " + Environment.NewLine +
-                                $"Valid example: 'server=https://btcpay.example.com/spark/btc/;cookiefile=/etc/clightning_bitcoin_spark/.cookie'" + Environment.NewLine + 
-                                $"Error: {error}" + Environment.NewLine +
-                                "This service will not be exposed through BTCPay Server");
-                        }
-                        else
-                        {
-                            ExternalServicesByCryptoCode.Add(net.CryptoCode, new ExternalSpark(connectionString));
-                        }
-                    }
-                }
-
-                {
-                    var rtl = conf.GetOrDefault<string>($"{net.CryptoCode}.external.rtl", string.Empty);
-                    if (rtl.Length != 0)
-                    {
-                        if (!SparkConnectionString.TryParse(rtl, out var connectionString, out var error))
-                        {
-                            Logs.Configuration.LogWarning($"Invalid setting {net.CryptoCode}.external.rtl, " + Environment.NewLine +
-                                $"Valid example: 'server=https://btcpay.example.com/rtl/btc/;cookiefile=/etc/clightning_bitcoin_rtl/.cookie'" + Environment.NewLine +
-                                $"Error: {error}" + Environment.NewLine +
-                                "This service will not be exposed through BTCPay Server");
-                        }
-                        else
-                        {
-                            ExternalServicesByCryptoCode.Add(net.CryptoCode, new ExternalRTL(connectionString));
-                        }
-                    }
-                }
-
-                var charge = conf.GetOrDefault<string>($"{net.CryptoCode}.external.charge", string.Empty);
-                if (charge.Length != 0)
-                {
-                    if (!LightningConnectionString.TryParse(charge, false, out var chargeConnectionString, out var chargeError))
-                        LightningConnectionString.TryParse("type=charge;" + charge, false, out chargeConnectionString, out chargeError);
-
-                    if (chargeConnectionString == null || chargeConnectionString.ConnectionType != LightningConnectionType.Charge)
-                    {
-                        Logs.Configuration.LogWarning($"Invalid setting {net.CryptoCode}.external.charge, " + Environment.NewLine +
-                                $"lightning charge server: 'type=charge;server=https://charge.example.com;api-token=2abdf302...'" + Environment.NewLine +
-                                $"lightning charge server: 'type=charge;server=https://charge.example.com;cookiefilepath=/root/.charge/.cookie'" + Environment.NewLine +
-                                $"Error: {chargeError ?? string.Empty}" + Environment.NewLine +
-                                $"This service will not be exposed through BTCPay Server");
-                    }
-                    else
-                    {
-                        ExternalServicesByCryptoCode.Add(net.CryptoCode, new ExternalCharge(chargeConnectionString));
-                    }
-                }
+                ExternalServices.Load(net.CryptoCode, conf);
             }
 
             Logs.Configuration.LogInformation("Supported chains: " + String.Join(',', supportedChains.ToArray()));
@@ -220,14 +135,25 @@ namespace BTCPayServer.Configuration
                                                 .Select(p => (Name: p.p.Substring(0, p.SeparatorIndex), 
                                                               Link: p.p.Substring(p.SeparatorIndex + 1))))
                 {
-                    ExternalServices.AddOrReplace(service.Name, service.Link);
+                    if (Uri.TryCreate(service.Link, UriKind.RelativeOrAbsolute, out var uri))
+                        OtherExternalServices.AddOrReplace(service.Name, uri);
                 }
             }
 
             PostgresConnectionString = conf.GetOrDefault<string>("postgres", null);
             MySQLConnectionString = conf.GetOrDefault<string>("mysql", null);
             BundleJsCss = conf.GetOrDefault<bool>("bundlejscss", true);
-            ExternalUrl = conf.GetOrDefault<Uri>("externalurl", null);
+            AllowAdminRegistration = conf.GetOrDefault<bool>("allow-admin-registration", false);
+            TorrcFile = conf.GetOrDefault<string>("torrcfile", null);
+
+            var socksEndpointString = conf.GetOrDefault<string>("socksendpoint", null);
+            if(!string.IsNullOrEmpty(socksEndpointString))
+            {
+                if (!Utils.TryParseEndpoint(socksEndpointString, 9050, out var endpoint))
+                    throw new ConfigException("Invalid value for socksendpoint");
+                SocksEndpoint = endpoint;
+            }
+            
 
             var sshSettings = ParseSSHConfiguration(conf);
             if ((!string.IsNullOrEmpty(sshSettings.Password) || !string.IsNullOrEmpty(sshSettings.KeyFile)) && !string.IsNullOrEmpty(sshSettings.Server))
@@ -287,7 +213,6 @@ namespace BTCPayServer.Configuration
 
         private SSHSettings ParseSSHConfiguration(IConfiguration conf)
         {
-            var externalUrl = conf.GetOrDefault<Uri>("externalurl", null);
             var settings = new SSHSettings();
             settings.Server = conf.GetOrDefault<string>("sshconnection", null);
             if (settings.Server != null)
@@ -314,12 +239,6 @@ namespace BTCPayServer.Configuration
                     settings.Username = "root";
                 }
             }
-            else if (externalUrl != null)
-            {
-                settings.Port = 22;
-                settings.Username = "root";
-                settings.Server = externalUrl.DnsSafeHost;
-            }
             settings.Password = conf.GetOrDefault<string>("sshpassword", "");
             settings.KeyFile = conf.GetOrDefault<string>("sshkeyfile", "");
             settings.KeyFilePassword = conf.GetOrDefault<string>("sshkeyfilepassword", "");
@@ -333,9 +252,9 @@ namespace BTCPayServer.Configuration
 
         public string RootPath { get; set; }
         public Dictionary<string, LightningConnectionString> InternalLightningByCryptoCode { get; set; } = new Dictionary<string, LightningConnectionString>();
-        public Dictionary<string, string> ExternalServices { get; set; } = new Dictionary<string, string>();
 
-        public ExternalServices ExternalServicesByCryptoCode { get; set; } = new ExternalServices();
+        public Dictionary<string, Uri> OtherExternalServices { get; set; } = new Dictionary<string, Uri>();
+        public ExternalServices ExternalServices { get; set; } = new ExternalServices();
 
         public BTCPayNetworkProvider NetworkProvider { get; set; }
         public string PostgresConnectionString
@@ -348,30 +267,18 @@ namespace BTCPayServer.Configuration
             get;
             set;
         }
-        public Uri ExternalUrl
-        {
-            get;
-            set;
-        }
         public bool BundleJsCss
         {
             get;
             set;
         }
+        public bool AllowAdminRegistration { get; set; }
         public List<SSHFingerprint> TrustedFingerprints { get; set; } = new List<SSHFingerprint>();
         public SSHSettings SSHSettings
         {
             get;
             set;
         }
-
-        internal string GetRootUri()
-        {
-            if (ExternalUrl == null)
-                return null;
-            UriBuilder builder = new UriBuilder(ExternalUrl);
-            builder.Path = RootPath;
-            return builder.ToString();
-        }
+        public string TorrcFile { get; set; }
     }
 }

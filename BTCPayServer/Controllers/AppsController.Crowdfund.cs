@@ -1,9 +1,11 @@
 ﻿using System;
+using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Threading.Tasks;
 using BTCPayServer.Models.AppViewModels;
 using BTCPayServer.Services.Apps;
+using BTCPayServer.Services.Mails;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BTCPayServer.Controllers
@@ -32,6 +34,7 @@ namespace BTCPayServer.Controllers
             var settings = app.GetSettings<CrowdfundSettings>();
             var vm = new UpdateCrowdfundViewModel()
             {
+                NotificationEmailWarning = !await IsEmailConfigured(app.StoreDataId),
                 Title = settings.Title,
                 Enabled = settings.Enabled,
                 EnforceTargetAmount = settings.EnforceTargetAmount,
@@ -56,7 +59,9 @@ namespace BTCPayServer.Controllers
                 AppId = appId,
                 SearchTerm = app.TagAllInvoices ? $"storeid:{app.StoreDataId}" : $"orderid:{AppService.GetCrowdfundOrderId(appId)}",
                 DisplayPerksRanking = settings.DisplayPerksRanking,
-                SortPerksByPopularity = settings.SortPerksByPopularity
+                SortPerksByPopularity = settings.SortPerksByPopularity,
+                Sounds                = string.Join(Environment.NewLine, settings.Sounds),
+                AnimationColors                = string.Join(Environment.NewLine, settings.AnimationColors)
             };
             return View(vm);
         }
@@ -90,6 +95,24 @@ namespace BTCPayServer.Controllers
             {
                 ModelState.AddModelError(nameof(vm.DisplayPerksRanking), "You must sort by popularity in order to display ranking.");
             }
+
+            var parsedSounds = vm.Sounds.Split(
+                new[] {"\r\n", "\r", "\n"},
+                StringSplitOptions.None
+            ).Select(s => s.Trim()).ToArray();
+            if (vm.SoundsEnabled && !parsedSounds.Any())
+            {
+                ModelState.AddModelError(nameof(vm.Sounds), "You must have at least one sound if you enable sounds");
+            }
+            
+            var parsedAnimationColors = vm.AnimationColors.Split(
+                new[] { "\r\n", "\r", "\n" },
+                StringSplitOptions.None
+            ).Select(s => s.Trim()).ToArray();
+            if (vm.AnimationsEnabled && !parsedAnimationColors.Any())
+            {
+                ModelState.AddModelError(nameof(vm.AnimationColors), "You must have at least one animation color if you enable animations");
+            }
             
             if (!ModelState.IsValid)
             {
@@ -106,15 +129,16 @@ namespace BTCPayServer.Controllers
                 Title = vm.Title,
                 Enabled = vm.Enabled,
                 EnforceTargetAmount = vm.EnforceTargetAmount,
-                StartDate = vm.StartDate,
+                StartDate = vm.StartDate?.ToUniversalTime(),
                 TargetCurrency = vm.TargetCurrency,
                 Description = _htmlSanitizer.Sanitize( vm.Description),
-                EndDate = vm.EndDate,
+                EndDate = vm.EndDate?.ToUniversalTime(),
                 TargetAmount = vm.TargetAmount,
                 CustomCSSLink = vm.CustomCSSLink,
                 MainImageUrl = vm.MainImageUrl,
                 EmbeddedCSS = vm.EmbeddedCSS,
                 NotificationUrl = vm.NotificationUrl,
+                NotificationEmail = vm.NotificationEmail,
                 Tagline = vm.Tagline,
                 PerksTemplate = vm.PerksTemplate,
                 DisqusEnabled = vm.DisqusEnabled,
@@ -124,7 +148,9 @@ namespace BTCPayServer.Controllers
                 ResetEveryAmount = vm.ResetEveryAmount,
                 ResetEvery = Enum.Parse<CrowdfundResetEvery>(vm.ResetEvery),
                 DisplayPerksRanking = vm.DisplayPerksRanking,
-                SortPerksByPopularity = vm.SortPerksByPopularity
+                SortPerksByPopularity = vm.SortPerksByPopularity,
+                Sounds = parsedSounds,
+                AnimationColors = parsedAnimationColors
             };
 
             app.TagAllInvoices = vm.UseAllStoreInvoices;

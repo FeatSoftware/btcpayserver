@@ -1,8 +1,7 @@
 hljs.initHighlightingOnLoad();
-$(document).ready(function() {
+$(document).ready(function () {
 
-    $(".richtext").summernote();
-    $(".datetime").flatpickr({
-        enableTime: true
+    $(".richtext").summernote({
+        minHeight: 300
     });
 });

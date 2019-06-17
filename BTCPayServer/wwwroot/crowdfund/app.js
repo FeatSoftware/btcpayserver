@@ -85,8 +85,6 @@ addLoadEvent(function (ev) {
                 connectionStatus: "",
                 endDate: "",
                 startDate: "",
-                startDateRelativeTime: "",
-                endDateRelativeTime: "",
                 started: false,
                 ended: false,
                 contributeModalOpen: false,
@@ -170,34 +168,38 @@ addLoadEvent(function (ev) {
                 if (this.srvModel.endDate) {
                     var endDateM = moment(this.srvModel.endDate);
                     this.endDate = endDateM.format('MMMM Do YYYY');
-                    this.endDateRelativeTime = endDateM.fromNow();
                     this.ended = endDateM.isBefore(moment());
                     
                 }else{
                     this.ended = false;
+                    this.endDate = null;
                 }
 
                 if (this.srvModel.startDate) {
                     var startDateM = moment(this.srvModel.startDate);
                     this.startDate = startDateM.format('MMMM Do YYYY');
-                    this.startDateRelativeTime = startDateM.fromNow();
                     this.started = startDateM.isBefore(moment());
                 }else{
                     this.started = true;
+                    this.startDate = null;
                 }
                 if(this.started && !this.ended && this.srvModel.endDate){
                     var mDiffD =  moment(this.srvModel.endDate).diff(moment(), "days");
                     var mDiffH =  moment(this.srvModel.endDate).diff(moment(), "hours");
                     var mDiffM =  moment(this.srvModel.endDate).diff(moment(), "minutes");
                     var mDiffS =  moment(this.srvModel.endDate).diff(moment(), "seconds");
-                    this.endDiff =  mDiffD > 0? mDiffD + " Days" : mDiffH> 0? mDiffH + " Hours" : mDiffM> 0? mDiffM+ " Minutes" : mDiffS> 0? mDiffS + " Seconds": ""; 
+                    this.endDiff =  mDiffD > 0? mDiffD + " days" : mDiffH> 0? mDiffH + " hours" : mDiffM> 0? mDiffM+ " minutes" : mDiffS> 0? mDiffS + " seconds": "";
+                }else{
+                    this.endDiff = null;
                 }
                 if(!this.started && this.srvModel.startDate){
                     var mDiffD =  moment(this.srvModel.startDate).diff(moment(), "days");
                     var mDiffH =  moment(this.srvModel.startDate).diff(moment(), "hours");
                     var mDiffM =  moment(this.srvModel.startDate).diff(moment(), "minutes");
                     var mDiffS =  moment(this.srvModel.startDate).diff(moment(), "seconds");
-                    this.startDiff =  mDiffD > 0? mDiffD + " Days" : mDiffH> 0? mDiffH + " Hours" : mDiffM> 0? mDiffM+ " Minutes" : mDiffS> 0? mDiffS + " Seconds": "";
+                    this.startDiff =  mDiffD > 0? mDiffD + " days" : mDiffH> 0? mDiffH + " hours" : mDiffM> 0? mDiffM+ " minutes" : mDiffS> 0? mDiffS + " seconds": "";
+                }else {
+                    this.startDiff = null;
                 }
                 this.lastUpdated = moment(this.srvModel.info.lastUpdated).calendar();
                 this.active = this.started && !this.ended;
@@ -216,7 +218,6 @@ addLoadEvent(function (ev) {
             this.sound = this.srvModel.soundsEnabled;
             this.animation = this.srvModel.animationsEnabled;
             eventAggregator.$on("invoice-created", function (invoiceId) {
-                btcpay.setApiUrlPrefix(window.location.origin);
                 btcpay.showInvoice(invoiceId);
                 btcpay.showFrame();
 
@@ -256,7 +257,7 @@ addLoadEvent(function (ev) {
             eventAggregator.$on("payment-received", function (amount, cryptoCode, type) {
                 var onChain = type.toLowerCase() === "btclike";
                 if(self.sound) {
-                    playRandomQuakeSound();
+                    playRandomSound();
                 }
                 if(self.animation) {
                     fireworks();

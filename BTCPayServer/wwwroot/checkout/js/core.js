@@ -46,6 +46,12 @@ function onDataCallback(jsonData) {
 
         resetTabsSlider();
         $("#paid").addClass("active");
+        if (!jsonData.isModal && jsonData.redirectAutomatically && jsonData.merchantRefLink) {
+            $(".payment__spinner").show();
+            setTimeout(function () {
+                window.location = jsonData.merchantRefLink;
+            }, 2000);
+        }
     }
 
     if (newStatus === "expired" || newStatus === "invalid") { //TODO: different state if the invoice is invalid (failed to confirm after timeout)
@@ -90,8 +96,31 @@ function onDataCallback(jsonData) {
         checkoutCtrl.lndModel = null;
     }
 
+    // displaying satoshis for lightning payments
+    jsonData.cryptoCodeSrv = jsonData.cryptoCode;
+    if (jsonData.isLightning && checkoutCtrl.lightningAmountInSatoshi && jsonData.cryptoCode === "BTC") {
+        var SATOSHIME = 100000000;
+        jsonData.cryptoCode = "Sats";
+        jsonData.btcDue = numberFormatted(jsonData.btcDue * SATOSHIME);
+        jsonData.btcPaid = numberFormatted(jsonData.btcPaid * SATOSHIME);
+        jsonData.networkFee = numberFormatted(jsonData.networkFee * SATOSHIME);
+        jsonData.orderAmount = numberFormatted(jsonData.orderAmount * SATOSHIME);
+    }
+
+    // expand line items to show details on amount due for multi-transaction payment
+    if (checkoutCtrl.srvModel.txCount === 1 && jsonData.txCount > 1) {
+        onlyExpandLineItems();
+    }
+
     // updating ui
     checkoutCtrl.srvModel = jsonData;
+}
+
+function numberFormatted(x) {
+    var rounded = Math.round(x);
+    var parts = rounded.toString().split(".");
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    return parts.join(".");
 }
 
 function fetchStatus() {
@@ -116,10 +145,31 @@ function lndToggleNode() {
     checkoutCtrl.scanDisplayQr = checkoutCtrl.srvModel.peerInfo;
 }
 
+var lineItemsExpanded = false;
+function toggleLineItems() {
+    $("line-items").toggleClass("expanded");
+    lineItemsExpanded ? $("line-items").slideUp() : $("line-items").slideDown();
+    lineItemsExpanded = !lineItemsExpanded;
+
+    $(".buyerTotalLine").toggleClass("expanded");
+    $(".single-item-order__right__btc-price__chevron").toggleClass("expanded");
+}
+
+function onlyExpandLineItems() {
+    if (!lineItemsExpanded) {
+        toggleLineItems();
+    }
+}
+
+
 // private methods
 $(document).ready(function () {
     // initialize
     onDataCallback(srvModel);
+    // initial expand of line items to show error message if multiple payments needed
+    if (srvModel.status === "new" && srvModel.txCount > 1) {
+        onlyExpandLineItems();
+    }
 
     // check if the Document expired
     if (srvModel.expirationSeconds > 0) {
@@ -142,6 +192,11 @@ $(document).ready(function () {
     jQuery("invoice").fadeIn(300);
 
     // eof initialize
+    
+    // Expand Line-Items
+    $(".buyerTotalLine").click(function () {
+        toggleLineItems();
+    });
 
     // FUNCTIONS
     function hideEmailForm() {
@@ -234,6 +289,7 @@ $(document).ready(function () {
     // Should connect using webhook ?
     // If notification received
 
+    var socket = null;
     var supportsWebSockets = 'WebSocket' in window && window.WebSocket.CLOSING === 2;
     if (supportsWebSockets) {
         var loc = window.location, ws_uri;
@@ -245,7 +301,7 @@ $(document).ready(function () {
         ws_uri += "//" + loc.host;
         ws_uri += loc.pathname + "/status/ws?invoiceId=" + srvModel.invoiceId;
         try {
-            var socket = new WebSocket(ws_uri);
+            socket = new WebSocket(ws_uri);
             socket.onmessage = function (e) {
                 fetchStatus();
             };
@@ -259,7 +315,9 @@ $(document).ready(function () {
     }
 
     var watcher = setInterval(function () {
-        fetchStatus();
+        if (socket === null || socket.readyState !== 1) {
+            fetchStatus();
+        }
     }, 2000);
 
     $(".menu__item").click(function () {
@@ -268,17 +326,6 @@ $(document).ready(function () {
         language();
         $(".selector span").text($(".selected").text());
         // function to load contents in different language should go there
-    });
-
-    // Expand Line-Items
-    var lineItemsExpanded = false;
-    $(".buyerTotalLine").click(function () {
-        $("line-items").toggleClass("expanded");
-        lineItemsExpanded ? $("line-items").slideUp() : $("line-items").slideDown();
-        lineItemsExpanded = !lineItemsExpanded;
-
-        $(".buyerTotalLine").toggleClass("expanded");
-        $(".single-item-order__right__btc-price__chevron").toggleClass("expanded");
     });
 
     // Timer Countdown && Progress bar
